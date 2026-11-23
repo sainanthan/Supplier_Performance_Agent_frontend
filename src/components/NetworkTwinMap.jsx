@@ -28,10 +28,12 @@ const MODELS = { ship: shipMesh(), truck: truckMesh(), factory: factoryMesh(), w
    - Dense traffic clusters on screen at low zoom (count = PO lines); click a cluster to zoom in.
    Same props / camera API as the classic Map3D so NetworkTracker can switch between them. */
 
-/* Basemaps. With a MapTiler key (ui/.env.local: VITE_MAPTILER_KEY=...) the map uses MapTiler's detailed streets, hybrid satellite
-   (imagery + labels), outdoor terrain style and terrain-RGB elevation. Without a key it falls back to free OpenFreeMap / Esri
-   tiles and public AWS elevation tiles. Only tile coordinates are requested; no supplier or shipment data is sent. */
-const MT = (import.meta.env.VITE_MAPTILER_KEY || "").trim();
+/* Basemaps. With a MapTiler key (frontend/.env.local or the host's env settings: VITE_MAPTILER_KEY=...) the map uses MapTiler's
+   detailed streets, hybrid satellite (imagery + labels), outdoor terrain style and terrain-RGB elevation. Without a key it falls back
+   to free OpenFreeMap / Esri tiles and public AWS elevation tiles. Only tile coordinates are requested; no supplier or shipment data
+   is sent. A value that is not a MapTiler key (e.g. a URL pasted into the setting by mistake) is ignored, so the map never goes blank. */
+const MT_RAW = (import.meta.env.VITE_MAPTILER_KEY || "").trim();
+const MT = /^[A-Za-z0-9]{16,64}$/.test(MT_RAW) ? MT_RAW : "";
 const mt = name => `https://api.maptiler.com/maps/${name}/style.json?key=${MT}`;
 export const MAP_PROVIDER = MT ? "MapTiler" : "OpenFreeMap";
 const DEM = MT
