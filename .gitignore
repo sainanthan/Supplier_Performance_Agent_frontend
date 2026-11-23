@@ -1,0 +1,13 @@
+# installed packages and build output: Vercel installs and builds these itself
+node_modules/
+dist/
+
+# local secrets (MapTiler key etc.)
+.env
+.env.local
+.env.*.local
+
+# editor / OS files
+.DS_Store
+Thumbs.db
+*.log
