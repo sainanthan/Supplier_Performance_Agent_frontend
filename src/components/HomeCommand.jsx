@@ -4,21 +4,23 @@
 // Everything drills through: a stage or part explains itself below and "Inspect" opens it in the app; a heatmap cell lists
 // its order lines; a supplier opens its profile.
 import { Fragment, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowRight, Bot, BrainCircuit, Cable, CheckCircle2, ClipboardCheck, Clock, Code2, Database, Factory, FileSpreadsheet, Gauge,
+import { AlertTriangle, ArrowRight, Bot, ChevronRight, FileText, Lock, BrainCircuit, Cable, CheckCircle2, ClipboardCheck, Clock, Code2, Database, Factory, FileSpreadsheet, Gauge,
   LayoutGrid, Layers, LineChart, ListChecks, Map as MapIcon, MessageSquare, ScrollText, UserCheck, Radar, Search, Send, ShieldCheck, ShoppingCart, Store, Truck, Users, Workflow, Zap } from "lucide-react";
 import { api } from "../api";
 import SidePanel from "./SidePanel";
-import { siFastapi, siLangchain, siMaplibre, siNumpy, siPostgresql, siPython, siReact } from "./brandIcons";
+import { siFastapi, siLangchain, siMaplibre, siNeon, siNumpy, siPostgresql, siPython, siReact } from "./brandIcons";
 import { fmt, inr, useLoad } from "../util";
 
 /* a drill target: a stage page, a page (optionally a Risk Radar tab), or a question to the agent */
 const P = (page, tab) => ({ page, tab }), STG = stage => ({ stage }), ASK = ask => ({ ask });
 
 /* the tool each source is read through: the Neon PostgreSQL warehouse (the app's primary connection) and the app's own portal */
-const NeonMark = ({ size }) => <svg viewBox="0 0 24 24" width={size} height={size} role="img" aria-label="Neon">
-  <defs><linearGradient id="neon-g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#00E599" /><stop offset="1" stopColor="#00B3A4" /></linearGradient></defs>
-  <rect x="2" y="2" width="20" height="20" rx="5" fill="url(#neon-g)" />
-  <path d="M7.5 16.5V7.5l9 9V7.5" fill="none" stroke="#0B2A1F" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" /></svg>;
+// official Neon logomark (Simple Icons, CC0; brand colour from neon.com/brand), drawn a little smaller than its tile
+const NeonMark = ({ size }) => <svg viewBox="-2 -2 28 28" width={size} height={size} role="img" aria-label="Neon"><path d={siNeon.path} fill={`#${siNeon.hex}`} /></svg>;
+const NeonLogo = ({ light }) => <span className={"neon-logo" + (light ? " light" : "")} role="img" aria-label="Neon DB">
+  <svg viewBox="0 0 24 24" aria-hidden><path d={siNeon.path} fill={`#${siNeon.hex}`} /></svg><b>NEON</b></span>;
+const withNeon = (str, light) => (typeof str === "string" && /Neon DB/.test(str)
+  ? str.split("Neon DB").flatMap((part, i) => (i ? [<NeonLogo key={i} light={light} />, part] : [part])) : str);
 const GwcMark = ({ size }) => <img src="/gwc-mark.png" alt="GWC supplier portal" width={size} height={size} style={{ objectFit: "contain" }} />;
 
 /* ------------------------------------------------------------ content */
@@ -168,6 +170,38 @@ const SHORT = {
   Dashboards: "Overview and trends", "Network Tracker": "Live shipment map", "Ask the agent": "Plain-language answers", "Review packs": "PDF and PowerPoint",
 };
 
+/* a dashboard monitor: bar chart + donut, drawn in code */
+const Monitor = () => <svg viewBox="0 0 120 84" className="h4-mon" aria-hidden>
+  <rect x="4" y="4" width="112" height="62" rx="7" fill="#1f2a5c" /><rect x="10" y="10" width="100" height="50" rx="3" fill="#fff" />
+  <rect x="20" y="38" width="9" height="16" rx="2" fill="#4d8eeb" /><rect x="33" y="30" width="9" height="24" rx="2" fill="#4d8eeb" />
+  <rect x="46" y="20" width="9" height="34" rx="2" fill="#f58a3a" />
+  <circle cx="84" cy="35" r="15" fill="#4d8eeb" /><path d="M84 35 L84 20 A15 15 0 0 1 98.3 39.6 Z" fill="#f58a3a" /><path d="M84 35 L98.3 39.6 A15 15 0 0 1 77 48.3 Z" fill="#19b394" />
+  <path d="M52 66 h16 l4 10 h-24 z" fill="#1f2a5c" /><rect x="40" y="76" width="40" height="5" rx="2.5" fill="#1f2a5c" /></svg>;
+
+function Showcase({ c, kind, sel, setSel, D }) {
+  const pick = t => setSel({ kind: "chip", col: c.id, id: t }), on = t => sel.kind === "chip" && sel.id === t;
+  if (kind === "gateway") {
+    return <div className="h4-show gw">
+      <div className="h4-cluster">
+        <span title="Neon DB: connected"><NeonMark size={26} /></span>
+        <span title="FastAPI gateway"><svg viewBox="0 0 24 24" width="24" height="24" aria-label="FastAPI"><path d={siFastapi.path} fill={`#${siFastapi.hex}`} /></svg></span>
+        <span title="Encrypted vault"><Lock size={22} /></span>
+      </div>
+      <span className="h4-entry">Secure entry</span>
+      <div className="h4-pills2">{c.chips.map(([, t]) => <button key={t} className={on(t) ? "on" : ""} aria-pressed={on(t)} onClick={() => pick(t)}>{t}</button>)}</div>
+      <em className="h4-cap">{subOf("Connectors", D)} · {subOf("Approvals", D)}</em>
+    </div>;
+  }
+  return <div className="h4-show bi">
+    <button className={"h4-monbtn" + (on(c.chips[0][1]) ? " on" : "")} onClick={() => pick(c.chips[0][1])} title="Supplier scorecards: how it works"><Monitor /></button>
+    <b className="h4-showt">Scorecards, trends &amp; reports</b>
+    <em className="h4-cap">{subOf("OTIF & PPM trends", D)}</em>
+    <div className="h4-logos">{c.chips.map(([I, t]) => { const info = CHIP[t] || {};
+      return <button key={t} className={on(t) ? "on" : ""} aria-pressed={on(t)} onClick={() => pick(t)} title={t}>
+        <Logo c={t === "Review packs" ? { icon: FileText } : info} Fallback={I} size={20} /><span>{{ "Supplier scorecards": "Scores", "OTIF & PPM trends": "Trends", "Network Tracker": "Map", "Review packs": "Packs" }[t] || t}</span></button>; })}</div>
+  </div>;
+}
+
 function Logo({ c, Fallback, size = 13 }) {
   if (c.mark) return <c.mark size={size} />;
   if (c.logo) return <svg className="hc-brand" viewBox="0 0 24 24" width={size} height={size} role="img" aria-label={c.logo.title}><path d={c.logo.path} fill={`#${c.logo.hex}`} /></svg>;
@@ -316,7 +350,7 @@ function DetailPane({ sel, live, onStage, goBtns, drill, D, allowed, PR }) {
       <p className="h4-what">{what}</p>
       {tech && <div className="h4-tech"><div><span>Technology</span>{tech}</div><div><span>Data tables</span><code>{tables}</code></div></div>}
       {V && <div className="h4-io"><div><em className="in">Incoming</em>{V.in}</div><div><em className="out">Outgoing</em>{V.out}</div></div>}
-      {pills.length > 0 && <div className="h4-pills">{pills.map(x => <span key={x}><i />{x}</span>)}</div>}
+      {pills.length > 0 && <div className="h4-pills">{pills.map(x => <span key={x}><i />{withNeon(x)}</span>)}</div>}
       <h4>Execution logic</h4>
       <ol className="h4-steps">{steps.map(s => <li key={s}>{s}</li>)}</ol>
     </div>
@@ -376,18 +410,18 @@ export default function HomeCommand({ L, S, statusOf, onStage, nav, allowed, ope
           return <Fragment key={c.id}>
           <div className={`h4-col t-${c.tone}` + (colOn || inCol ? " on" : "") + (c.key ? " key" : "")}>
             <button className="h4-colh" onClick={() => setSel({ kind: "col", id: c.id })} aria-pressed={colOn}>
-              <span className="h4-n"><i>{c.n}</i><H size={17} aria-hidden /></span><b>{c.title}</b><em>{V.sub}</em>
-              {V.flow && <span className="h4-hflow">{V.flow.map((f, k) => <Fragment key={f}>{k > 0 && <ArrowRight size={10} aria-hidden />}<span>{f}</span></Fragment>)}</span>}
+              <H size={22} strokeWidth={2} aria-hidden className="h4-hic" /><b>{c.n}. {c.title}</b><em>{withNeon(V.sub, true)}</em>
+              {V.flow && c.id !== "integration" && <span className="h4-hflow">{V.flow.map((f, k) => <Fragment key={f}>{k > 0 && <ArrowRight size={10} aria-hidden />}<span>{f}</span></Fragment>)}</span>}
               {c.key && <span className="h4-key">Key layer</span>}</button>
-            <div className="h4-items">
+            {c.id === "integration" || c.id === "outputs" ? <Showcase c={c} kind={c.id === "integration" ? "gateway" : "bi"} sel={sel} setSel={setSel} D={D} /> : <div className="h4-items">
               {c.chips.map(([I, t]) => { const info = CHIP[t] || {}, on = sel.kind === "chip" && sel.id === t;
                 return <button key={t} className={"h4-item" + (on ? " on" : "") + (info.logo || info.mark ? " brand" : "") + (info.conn ? " conn" : "")} aria-pressed={on}
                   onClick={() => setSel({ kind: "chip", col: c.id, id: t })} title={`${t}: how it works`}>
                   <span className="h4-tile"><Logo c={info} Fallback={I} size={info.mark ? 24 : 20} />{info.conn && <i className="h4-conn" title="Connected" />}</span>
-                  <span className="h4-it"><b>{t}</b><em>{subOf(t, D)}</em></span></button>; })}
-            </div>
+                  <span className="h4-it"><b>{t}</b><em>{withNeon(subOf(t, D))}</em></span></button>; })}
+            </div>}
           </div>
-          {i < COLS.length - 1 && <span className="h4-arrow" aria-hidden><ArrowRight size={18} strokeWidth={2.6} /></span>}
+          {i < COLS.length - 1 && <span className="h4-arrow" aria-hidden><ChevronRight size={20} strokeWidth={2.4} /></span>}
           </Fragment>; })}</div>
       </section>
 
