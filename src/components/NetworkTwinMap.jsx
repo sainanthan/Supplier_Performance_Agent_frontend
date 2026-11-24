@@ -421,7 +421,17 @@ const NetworkTwinMap = forwardRef(function NetworkTwinMap({ data, theme, simDayR
   // follow the selected vehicle
   const selPos = vehicles.find(v => v.id === selected)?.pos;
   const followT = useRef(0);
-  useEffect(() => { if (follow && selPos && performance.now() - followT.current > 600) { followT.current = performance.now(); mapRef.current?.easeTo({ center: selPos, duration: 550 }); } });
+  const loaded = useRef(false), followId = useRef(null);
+  useEffect(() => {
+    if (!follow) { followId.current = null; return; }
+    if (!selPos || !loaded.current) return;
+    if (followId.current !== selected) {                     // first time on this vehicle: fly in close
+      followId.current = selected; followT.current = performance.now() + 1200;
+      mapRef.current?.easeTo({ center: selPos, zoom: Math.max(mapRef.current.getZoom(), 8), pitch: 48, duration: 1600 });
+      return;
+    }
+    if (performance.now() - followT.current > 600) { followT.current = performance.now(); mapRef.current?.easeTo({ center: selPos, duration: 550 }); }
+  });
 
   const onHover = info => {
     const o = info.object, lid = info.layer?.id;
@@ -445,7 +455,7 @@ const NetworkTwinMap = forwardRef(function NetworkTwinMap({ data, theme, simDayR
     <div ref={wrap} className="twin-map" style={{ position: "absolute", inset: 0 }}>
       <Map ref={mapRef} {...vs} onMove={e => setVs(e.viewState)} mapStyle={base === "satellite" ? (STYLE.hybrid || STYLE.satellite) : night ? STYLE.dark : STYLE.light}
         maxPitch={75} style={{ position: "absolute", inset: 0 }} attributionControl={{ compact: true }} dragRotate touchPitch
-        onLoad={() => { fit(VIEWS[view] || VIEWS.asia); applyRelief(); if (import.meta.env.DEV) window.__twinMap = mapRef.current?.getMap?.(); }}>
+        onLoad={() => { fit(VIEWS[view] || VIEWS.asia); applyRelief(); setTimeout(() => { loaded.current = true; }, 950); if (import.meta.env.DEV) window.__twinMap = mapRef.current?.getMap?.(); }}>
         <DeckOverlay layers={L} effects={[LIGHTS]} onHover={onHover} onClick={onClick} getCursor={({ isHovering }) => (isHovering ? "pointer" : "grab")} />
       </Map>
       <div className="twin-base" role="group" aria-label="Basemap">

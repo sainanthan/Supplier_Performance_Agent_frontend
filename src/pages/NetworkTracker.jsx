@@ -115,6 +115,14 @@ export default function NetworkTracker({ theme, openSupplier, ask, features, use
   const winStart = useRef(null);
   const [win, setWin] = useState(null);
   const jump = t => { winStart.current = null; setWin(null); simDay.current = t; setDay(t); };
+  // GPS Tracking page hand-off: open with one vehicle selected, followed and zoomed in, at today
+  useEffect(() => {
+    if (!data) return;
+    let f = null;
+    try { f = JSON.parse(sessionStorage.getItem("nt.focus") || "null"); sessionStorage.removeItem("nt.focus"); } catch { /* storage unavailable */ }
+    if (!f?.id) return;
+    setPlaying(false); jump(tNow); setFocus(null); setSel(f.id); setFollow(true);
+  }, [data]); // eslint-disable-line react-hooks/exhaustive-deps
   const lanes = useMemo(() => Object.fromEntries((data?.lanes || []).map(l => [l.id, l])), [data]);
   // T3 filters: supplier, plant, material group, risk level (approved health bands), transport mode, ETA date range
   const tOf = d => (d && data ? (new Date(d) - new Date(data.start)) / DAY_MS : null);

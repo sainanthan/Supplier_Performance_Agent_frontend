@@ -1,13 +1,11 @@
-// GPS tracking: its own page (was a card in Settings). Register trucks / vessels, hand the driver link to the driver, start a
-// trip with the open PO lines it carries, and follow each vehicle's latest positions. Positions are accepted only during an
-// active trip; the Network Tracker then shows the vehicle with the "Live" label.
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, Clock, Copy, Gauge, MapPinned, Navigation, Package, Play, Plus, Route, RotateCw, Search, Smartphone, Square, Truck, X } from "lucide-react";
-import { km, routeProgress } from "../components/geo";
+// GPS tracking: every truck and vessel that is on the Network Tracker map today, in one list. Click a vehicle to open the
+// Network Tracker zoomed onto it (selected, followed, details open). Below: the GPS devices registered for live tracking
+// (register, start / end a trip, driver link) — their positions show as "Live" on the Network Tracker.
+import { useEffect, useMemo, useRef, useState } from "react";
+import { CheckCircle2, ChevronRight, Clock, Copy, Navigation, Package, Play, Plus, RotateCw, Search, Ship, Square, Truck, X } from "lucide-react";
 import { api } from "../api";
 import { PageHead } from "../components/ui";
 import { fmt, useLoad } from "../util";
-const GpsLiveMap = lazy(() => import("../components/GpsLiveMap"));
 
 /* numbers glide to their new value instead of jumping */
 function useCount(target, ms = 900) {
@@ -21,20 +19,54 @@ function useCount(target, ms = 900) {
   }, [target, ms]);
   return v;
 }
-function Count({ value, digits = 0 }) { const v = useCount(value); return <>{Number.isFinite(Number(value)) ? fmt(v, digits) : value}</>; }
-/* re-renders every second so "N s ago" ticks */
-function useTick(ms = 1000) { const [, set] = useState(0); useEffect(() => { const t = setInterval(() => set(x => x + 1), ms); return () => clearInterval(t); }, [ms]); }
-const since = iso => { if (!iso) return "–"; const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
-  return s < 60 ? `${s} s ago` : s < 3600 ? `${Math.floor(s / 60)} min ${s % 60} s ago` : ago(iso); };
+function Count({ value }) { const v = useCount(value); return <>{Number.isFinite(Number(value)) ? fmt(v, 0) : value}</>; }
 
 const ago = iso => {
   if (!iso) return "never";
   const m = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
   return m < 1 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
 };
-const LIVE_MIN = 15;                                                   // a vehicle counts as "live" if it reported in the last 15 minutes
+const LIVE_MIN = 15;
 const isLive = v => v.trip_id && v.last_ping && Date.now() - new Date(v.last_ping).getTime() < LIVE_MIN * 60000;
-const when = iso => (iso ? new Date(iso).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "–");
+const DAY_MS = 86400000;
+const ST = { ok: ["On track", "ok"], risk: ["At risk", "risk"], late: ["Late", "late"], dis: ["Disrupted", "dis"] };
+const SRC = { LIVE: "Live GPS", MILESTONE: "Milestones", ESTIMATED: "Estimated" };
+const short = n => (n?.name || "").split(" (")[0].replace(" Electronics Plant", " plant");
+
+/* the vehicles the Network Tracker draws "today": consolidated truck / vessel runs, plus GPS / milestone-tracked shipments
+   (shipments riding on the same registered vehicle are grouped into one row) */
+function networkVehicles(d) {
+  if (!d) return [];
+  const day = Math.max(0, Math.min(d.days, d.t_now ?? d.t_as_of)), buf = d.lane_buffer_days ?? 2;
+  const nodes = Object.fromEntries(d.nodes.map(n => [n.id, n])), lanes = Object.fromEntries((d.lanes || []).map(l => [l.id, l]));
+  const dateOf = t => new Date(new Date(d.start).getTime() + t * DAY_MS);
+  const status = (eta, prom, dis) => (dis ? "dis" : day > prom ? "late" : eta > prom - buf ? "risk" : "ok");
+  const out = [];
+  for (const m of d.movements || []) {
+    if (day < m.t_depart || day >= m.t_eta) continue;
+    const aboard = (m.m || []).filter(x => day >= x[0] && day < x[1]);
+    if (!aboard.length) continue;
+    const rank = { ok: 0, risk: 1, late: 2, dis: 3 };
+    const st = aboard.map(x => status(x[1], x[2], x[3])).reduce((a, b) => (rank[b] > rank[a] ? b : a), "ok");
+    out.push({ id: m.id, focus: m.id, mode: lanes[m.lane]?.mode || m.mode, supplier: nodes[m.supplier_id], supplier_id: m.supplier_id, plant: nodes[m.plant_id],
+      st, src: m.position || "ESTIMATED", count: aboard.length, prog: (day - m.t_depart) / Math.max(0.01, m.t_eta - m.t_depart),
+      eta: dateOf(Math.max(...aboard.map(x => x[1]))), label: (lanes[m.lane]?.mode || m.mode) === "SEA" ? `Vessel · Sailing ${m.id.split("-").pop().replace(/^S/, "")}` : `Truck · Trip ${m.id.split("-").pop().replace(/^S/, "")}`,
+      sub: m.id.replace(/^M-/, "") });
+  }
+  const byVeh = {};
+  for (const s of d.shipments) {
+    if (!s.track || day < s.t_depart || day >= s.t_eta) continue;
+    const key = s.vehicle?.vehicle_id || s.id, st = status(s.t_eta, s.t_promised, s.disrupted);
+    const row = byVeh[key] || (byVeh[key] = { id: key, focus: s.id, mode: lanes[s.lane]?.mode || "ROAD", supplier: nodes[s.supplier_id], supplier_id: s.supplier_id,
+      plant: nodes[s.plant_id], st, src: s.pos_source || "MILESTONE", count: 0, prog: (day - s.t_depart) / Math.max(0.01, s.t_eta - s.t_depart), eta: dateOf(s.t_eta),
+      label: s.vehicle ? s.vehicle.registration : `${(lanes[s.lane]?.mode || "ROAD") === "SEA" ? "Vessel" : "Truck"} · ${s.po_id}`, sub: s.vehicle ? `${s.vehicle.vehicle_id} · ${s.vehicle.carrier || "GPS device"}` : s.id,
+      gpsAgoH: s.vehicle?.last_ping_t != null ? Math.max(0, (day - s.vehicle.last_ping_t) * 24) : null });
+    row.count++;
+    if ({ ok: 0, risk: 1, late: 2, dis: 3 }[st] > { ok: 0, risk: 1, late: 2, dis: 3 }[row.st]) row.st = st;
+  }
+  out.push(...Object.values(byVeh));
+  return out.sort((a, b) => ({ dis: 0, late: 1, risk: 2, ok: 3 }[a.st] - { dis: 0, late: 1, risk: 2, ok: 3 }[b.st]) || (a.src === "LIVE" ? -1 : 1) - (b.src === "LIVE" ? -1 : 1));
+}
 
 function Secret({ s, onClose, copy }) {
   return <div className="gp-secret">
@@ -50,138 +82,133 @@ function Secret({ s, onClose, copy }) {
 }
 
 export default function GpsTracking({ nav }) {
+  const trk = useLoad(() => api.tracker({}), []);
   const v = useLoad(() => api.vehicles(), []);
   const open = useLoad(() => api.predLate().catch(() => null), []);
+  const [q, setQ] = useState(""), [mode, setMode] = useState(""), [stf, setStf] = useState("");
   const [sel, setSel] = useState(null), [msg, setMsg] = useState(""), [secret, setSecret] = useState(null);
   const [adding, setAdding] = useState(false), [form, setForm] = useState({ kind: "TRUCK", registration: "", carrier: "", device_type: "PHONE" });
-  const [picking, setPicking] = useState(false), [pick, setPick] = useState([]), [q, setQ] = useState("");
-  const list = v.data || [];
-  const cur = list.find(x => x.vehicle_id === sel) || list[0];
-  const track = useLoad(() => (cur ? api.vehicleTrack(cur.vehicle_id).catch(() => null) : Promise.resolve(null)), [cur?.vehicle_id, cur?.trip_id, cur?.pings]);
-  useEffect(() => { setPicking(false); setPick([]); setQ(""); }, [cur?.vehicle_id]);
+  const [picking, setPicking] = useState(false), [pick, setPick] = useState([]), [lq, setLq] = useState("");
   useEffect(() => { const t = setInterval(() => v.reload(), 60000); return () => clearInterval(t); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const all = useMemo(() => networkVehicles(trk.data), [trk.data]);
+  const rows = all.filter(r => (!mode || r.mode === mode) && (!stf || r.st === stf)
+    && (!q || `${r.label} ${r.sub} ${r.supplier?.name} ${r.plant?.name}`.toLowerCase().includes(q.toLowerCase())));
+  const cnt = k => all.filter(r => r.st === k).length;
+
+  /* open the Network Tracker zoomed onto this vehicle */
+  const showOnMap = id => { try { sessionStorage.setItem("nt.focus", JSON.stringify({ id })); } catch { /* storage unavailable */ } nav("tracker"); };
 
   const flash = m => { setMsg(m); setTimeout(() => setMsg(""), 5000); };
   const run = async (p, ok) => { try { const r = await p; if (ok) flash(ok); v.reload(); return r; } catch (e) { flash(e.message); return null; } };
   const copy = t => navigator.clipboard?.writeText(t).then(() => flash("Copied."), () => {});
+  const devices = v.data || [];
+  const cur = devices.find(x => x.vehicle_id === sel);
   const register = async () => {
     const r = await run(api.createVehicle(form), "Vehicle registered.");
     if (r) { setSecret(r); setSel(r.vehicle_id); setAdding(false); setForm({ ...form, registration: "", carrier: "" }); }
   };
   const lines = useMemo(() => (open.data?.items || []).map(x => ({ id: `${x.po_id}-${x.po_line}`, ...x }))
-    .filter(x => !q || `${x.id} ${x.supplier_name} ${x.material_name}`.toLowerCase().includes(q.toLowerCase())).slice(0, 60), [open.data, q]);
+    .filter(x => !lq || `${x.id} ${x.supplier_name} ${x.material_name}`.toLowerCase().includes(lq.toLowerCase())).slice(0, 60), [open.data, lq]);
   const startTrip = async () => {
     const r = await run(api.startTrip(cur.vehicle_id, pick), `Trip started on ${cur.registration}: the driver can now share location.`);
     if (r) { setPicking(false); setPick([]); }
   };
-
-  const onTrip = list.filter(x => x.trip_id).length, live = list.filter(isLive).length;
-  const pings = list.reduce((s, x) => s + (x.pings || 0), 0);
-  const lastAny = list.map(x => x.last_ping).filter(Boolean).sort().at(-1);
-  const t = track.data;
-  useTick();
-  const pts = (t?.pings || []), lastP = pts.at(-1), prog = routeProgress(t?.route, lastP ? [lastP.lat, lastP.lon] : null);
-  const spd = pts.slice(-5).filter(p => p.speed_kmh != null), avgSpd = spd.length ? spd.reduce((a, p) => a + p.speed_kmh, 0) / spd.length : null;
-  const driven = pts.reduce((a, p, k) => a + (k ? km([pts[k - 1].lat, pts[k - 1].lon], [p.lat, p.lon]) : 0), 0);
-  const eta = prog && avgSpd ? new Date(Date.now() + (prog.left / avgSpd) * 3600000) : null;
+  const devRow = id => all.find(r => r.id === id);
 
   return <div className="gp">
     <PageHead eyebrow="Logistics" title="GPS tracking"
-      sub="Register vehicles, give drivers their tracking link, and follow each trip live on the Network Tracker." />
-
+      sub="Every truck and vessel on the network today. Click a vehicle to see it on the Network Tracker map." />
 
     <div className="gp-kpis">
-      {[["Vehicles", list.length, "registered"], ["On a trip", onTrip, "sharing location allowed"], ["Live now", live, `reported in the last ${LIVE_MIN} min`],
-        ["Positions", pings, "on active trips"], ["Last position", lastAny ? since(lastAny) : "–", lastAny ? when(lastAny) : "no positions yet"]].map(([l, val, s], i) =>
-        <div key={l} className={"gp-kpi" + (i === 2 && live ? " live" : "")} style={{ "--d": `${i * 70}ms` }}><span>{i === 2 && live ? <><i className="gp-pulse" />{l}</> : l}</span><b><Count value={val} /></b><em>{s}</em></div>)}
+      {[["On the network", all.length, "trucks and vessels in transit today", ""], ["Trucks", all.filter(r => r.mode === "ROAD").length, "on the road", ""],
+        ["Vessels", all.filter(r => r.mode === "SEA").length, "at sea", ""], ["Late or at risk", cnt("late") + cnt("risk") + cnt("dis"), `${cnt("late")} late · ${cnt("dis")} disrupted`, "warn"],
+        ["Live GPS", all.filter(r => r.src === "LIVE").length, "reporting their position", "live"]].map(([l, val, s, k], i) =>
+        <div key={l} className={"gp-kpi" + (k ? ` ${k}` : "")} style={{ "--d": `${i * 70}ms` }}><span>{k === "live" ? <><i className="gp-pulse" />{l}</> : l}</span><b><Count value={val} /></b><em>{s}</em></div>)}
     </div>
 
-    <ol className="gp-steps">
-      {[[Truck, "Register the vehicle", "Registration, carrier and how it reports"], [Play, "Start a trip", "Pick the open PO lines it carries"],
-        [Smartphone, "Driver shares location", "Opens the link on the phone and taps start"], [MapPinned, "Follow it live", "Shown as Live on the Network Tracker"]].map(([I, b, s], i) =>
-        <li key={b}><span className="gp-n">{i + 1}</span><I size={17} /><div><b>{b}</b><em>{s}</em></div></li>)}
-    </ol>
+    <section className="card gv">
+      <header className="gv-h">
+        <div><h3>Vehicles on the network</h3><span className="muted">As on the Network Tracker map today{trk.data?.today ? ` (${trk.data.today})` : ""}. Click one to open it on the map.</span></div>
+        <label className="gp-search"><Search size={13} /><input value={q} onChange={e => setQ(e.target.value)} placeholder="Search vehicle, supplier or plant" aria-label="Search vehicles" /></label>
+      </header>
+      <div className="gv-filters">
+        <div className="seg">{[["", "All"], ["ROAD", "Trucks"], ["SEA", "Vessels"]].map(([k, l]) => <button key={l} className={mode === k ? "on" : ""} onClick={() => setMode(k)}>{l}</button>)}</div>
+        <div className="seg">{[["", "Any status"], ["late", `Late (${cnt("late")})`], ["risk", `At risk (${cnt("risk")})`], ["dis", `Disrupted (${cnt("dis")})`], ["ok", `On track (${cnt("ok")})`]].map(([k, l]) =>
+          <button key={k} className={stf === k ? "on" : ""} onClick={() => setStf(k)}>{l}</button>)}</div>
+        <span className="muted">{rows.length} of {all.length}</span>
+      </div>
+      {trk.err ? <div className="err">{trk.err}</div> : trk.loading ? <div className="skeleton" style={{ height: 260 }} /> : !rows.length
+        ? <div className="gp-empty"><Truck size={22} /><b>No vehicles match</b><span>Change the filters to see more.</span></div>
+        : <div className="gv-table" role="table" aria-label="Vehicles on the network">
+          <div className="gv-row head" role="row"><span>Vehicle</span><span>Route</span><span>Status</span><span>Progress</span><span>Arrives</span><span>Position</span><span /></div>
+          {rows.map((r, i) => {
+            const I = r.mode === "SEA" ? Ship : Truck;
+            return <button key={r.id} className={`gv-row st-${r.st}`} role="row" onClick={() => showOnMap(r.focus)} style={{ "--d": `${Math.min(i, 20) * 25}ms` }}
+              title={`Show ${r.label} on the Network Tracker`}>
+              <span className="gv-veh"><i className={`gv-ic ${r.mode === "SEA" ? "sea" : "road"}`}><I size={16} /></i><span><b>{r.label}</b><em>{r.sub}</em></span></span>
+              <span className="gv-route"><b>{short(r.supplier) || r.supplier_id}</b><em>to {short(r.plant)}</em></span>
+              <span><span className={`gv-st ${ST[r.st][1]}`}>{ST[r.st][0]}</span></span>
+              <span className="gv-prog"><span className="gv-bar"><i style={{ width: `${Math.round(Math.min(1, Math.max(0, r.prog)) * 100)}%` }} /></span><em>{Math.round(Math.min(1, Math.max(0, r.prog)) * 100)}% · {r.count} shipment{r.count === 1 ? "" : "s"}</em></span>
+              <span className="gv-eta">{r.eta.toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}</span>
+              <span className={`gv-src s-${r.src}`}>{r.src === "LIVE" && <i />}{SRC[r.src] || r.src}{r.gpsAgoH != null ? <em>{r.gpsAgoH < 1 ? `${Math.round(r.gpsAgoH * 60)} min ago` : `${fmt(r.gpsAgoH, 1)} h ago`}</em> : null}</span>
+              <span className="gv-go">View on map <ChevronRight size={14} /></span>
+            </button>;
+          })}
+        </div>}
+    </section>
 
     {secret && <Secret s={secret} onClose={() => setSecret(null)} copy={copy} />}
     {msg && <div className="gp-msg">{msg}</div>}
 
-    <div className="gp-grid">
-      <section className="card gp-list">
-        <header className="gp-h"><h3>Vehicles</h3><button className="primary chip-btn" onClick={() => setAdding(a => !a)}>{adding ? <><X size={13} /> Cancel</> : <><Plus size={13} /> Register vehicle</>}</button></header>
-        {adding && <div className="gp-form">
-          <label>Type<select value={form.kind} onChange={e => setForm({ ...form, kind: e.target.value })}><option value="TRUCK">Truck</option><option value="VESSEL">Vessel</option></select></label>
-          <label>Registration / IMO<input value={form.registration} onChange={e => setForm({ ...form, registration: e.target.value })} placeholder="TN-09-AB-1234" autoFocus /></label>
-          <label>Carrier<input value={form.carrier} onChange={e => setForm({ ...form, carrier: e.target.value })} placeholder="Transporter name" /></label>
-          <label>Reports by<select value={form.device_type} onChange={e => setForm({ ...form, device_type: e.target.value })}>
-            <option value="PHONE">Driver's phone</option><option value="TELEMATICS">Telematics device</option><option value="AIS">Ship AIS</option><option value="SIMULATOR">Simulator (demo)</option></select></label>
-          <button className="primary" disabled={form.registration.trim().length < 3} onClick={register}>Register</button>
-        </div>}
-        {v.err ? <div className="err">{v.err}</div> : v.loading ? <div className="skeleton" style={{ height: 160 }} /> : !list.length
-          ? <div className="gp-empty"><Truck size={22} /><b>No vehicles yet</b><span>Register the first truck to get its driver link.</span></div>
-          : <ul className="gp-vlist">{list.map(x => <li key={x.vehicle_id}>
-            <button className={"gp-v" + (cur?.vehicle_id === x.vehicle_id ? " on" : "")} onClick={() => setSel(x.vehicle_id)} style={{ opacity: x.active ? 1 : 0.55 }}>
+    <section className="card gd">
+      <header className="gv-h">
+        <div><h3>GPS devices</h3><span className="muted">Trucks and vessels that report their own position. Start a trip and give the driver the link; the vehicle then shows as Live GPS above and on the map.</span></div>
+        <button className="primary chip-btn" onClick={() => setAdding(a => !a)}>{adding ? <><X size={13} /> Cancel</> : <><Plus size={13} /> Register vehicle</>}</button>
+      </header>
+      {adding && <div className="gp-form">
+        <label>Type<select value={form.kind} onChange={e => setForm({ ...form, kind: e.target.value })}><option value="TRUCK">Truck</option><option value="VESSEL">Vessel</option></select></label>
+        <label>Registration / IMO<input value={form.registration} onChange={e => setForm({ ...form, registration: e.target.value })} placeholder="TN-09-AB-1234" autoFocus /></label>
+        <label>Carrier<input value={form.carrier} onChange={e => setForm({ ...form, carrier: e.target.value })} placeholder="Transporter name" /></label>
+        <label>Reports by<select value={form.device_type} onChange={e => setForm({ ...form, device_type: e.target.value })}>
+          <option value="PHONE">Driver's phone</option><option value="TELEMATICS">Telematics device</option><option value="AIS">Ship AIS</option><option value="SIMULATOR">Simulator (demo)</option></select></label>
+        <button className="primary" disabled={form.registration.trim().length < 3} onClick={register}>Register</button>
+      </div>}
+      {v.err ? <div className="err">{v.err}</div> : v.loading ? <div className="skeleton" style={{ height: 120 }} /> : !devices.length
+        ? <div className="gp-empty"><Truck size={22} /><b>No GPS devices yet</b><span>Register the first truck to get its driver link.</span></div>
+        : <div className="gd-list">{devices.map(x => {
+          const onNet = devRow(x.vehicle_id), on = sel === x.vehicle_id;
+          return <div key={x.vehicle_id} className={"gd-item" + (on ? " on" : "")} style={{ opacity: x.active ? 1 : 0.55 }}>
+            <button className="gd-main" onClick={() => setSel(on ? null : x.vehicle_id)} aria-expanded={on}>
               <span className={"gp-dot " + (isLive(x) ? "live" : x.trip_id ? "trip" : "idle")} />
               <span className="gp-vt"><b>{x.registration}</b><em>{x.vehicle_id} · {x.kind === "VESSEL" ? "vessel" : "truck"}{x.carrier ? ` · ${x.carrier}` : ""}</em></span>
               <span className="gp-vs">{isLive(x) ? "Live" : x.trip_id ? `On trip · ${ago(x.last_ping)}` : "Idle"}</span>
-            </button></li>)}</ul>}
-      </section>
+            </button>
+            {onNet && <button className="ghost chip-btn" onClick={() => showOnMap(onNet.focus)}><Navigation size={12} /> View on map</button>}
+          </div>; })}</div>}
 
-      <section className="card gp-detail">
-        {!cur ? <div className="gp-empty"><MapPinned size={22} /><b>Select a vehicle</b><span>Its trip, positions and actions appear here.</span></div> : <>
-          <header className="gp-h">
-            <div><h3>{cur.registration}</h3><span className="muted">{cur.vehicle_id} · {cur.kind === "VESSEL" ? "Vessel" : "Truck"} · reports by {{ PHONE: "driver's phone", TELEMATICS: "telematics", AIS: "AIS", SIMULATOR: "simulator (demo)" }[cur.device_type] || cur.device_type}{cur.carrier ? ` · ${cur.carrier}` : ""}</span></div>
-            <span className={"gp-badge " + (isLive(cur) ? "live" : cur.trip_id ? "trip" : "idle")}>{isLive(cur) ? "Live" : cur.trip_id ? "On trip" : "Idle"}</span>
-          </header>
-          <div className="gp-acts">
-            {cur.active && !cur.trip_id && <button className="primary chip-btn" onClick={() => setPicking(p => !p)}><Play size={12} /> Start trip</button>}
-            {cur.trip_id && <button className="ghost chip-btn" onClick={() => run(api.endTrip(cur.vehicle_id), "Trip ended.")}><Square size={12} /> End trip</button>}
-            <button className="ghost chip-btn" title="Issue a new driver link; the old one stops working" onClick={async () => { const r = await run(api.rotateVehicleKey(cur.vehicle_id), "New driver link issued."); if (r) setSecret(r); }}><RotateCw size={12} /> New driver link</button>
-            <button className="ghost chip-btn" onClick={() => nav("tracker")}><Navigation size={12} /> Open Network Tracker</button>
-          </div>
-
-          {picking && <div className="gp-pick">
-            <div className="gp-pick-h"><b>Which open PO lines is {cur.registration} carrying?</b><span>{pick.length} selected</span></div>
-            <label className="gp-search"><Search size={13} /><input value={q} onChange={e => setQ(e.target.value)} placeholder="Search PO line, supplier or material" /></label>
-            <div className="gp-lines">{open.loading ? <div className="skeleton" style={{ height: 120 }} /> : lines.map(x => {
-              const on = pick.includes(x.id);
-              return <label key={x.id} className={"gp-line" + (on ? " on" : "")}>
-                <input type="checkbox" checked={on} onChange={() => setPick(p => (on ? p.filter(y => y !== x.id) : [...p, x.id]))} />
-                <b>{x.id}</b><span>{x.supplier_name} · {x.material_name}</span><em>due {x.promised_date}</em></label>; })}
-              {!open.loading && !lines.length && <div className="muted">No open PO lines match.</div>}</div>
-            <div className="gp-acts"><button className="primary chip-btn" disabled={!pick.length} onClick={startTrip}><Play size={12} /> Start trip with {pick.length || "no"} line{pick.length === 1 ? "" : "s"}</button>
-              <button className="ghost chip-btn" onClick={() => setPicking(false)}>Cancel</button></div>
-          </div>}
-
-          <div className="gp-mapwrap">
-            <Suspense fallback={<div className="skeleton" style={{ height: "100%" }} />}><GpsLiveMap track={t} live={isLive(cur)} /></Suspense>
-            {lastP && <div className={"gp-live-chip" + (isLive(cur) ? " on" : "")}><i />{isLive(cur) ? "Live" : "Last seen"} · updated {since(lastP.ts)}</div>}
-            {prog && <div className="gp-prog">
-              <div className="gp-prog-h"><span>{t.route.origin?.name}</span><b>{fmt(prog.pct, 0)}% of the way</b><span>{t.route.dest?.name}</span></div>
-              <div className="gp-bar"><i style={{ width: `${prog.pct}%` }} /><em style={{ left: `${prog.pct}%` }}><Truck size={11} /></em></div>
-            </div>}
-          </div>
-          <div className="gp-stats">
-            <div><Gauge size={16} /><span>Speed</span><b>{avgSpd != null ? <><Count value={avgSpd} /> <small>km/h</small></> : "–"}</b></div>
-            <div><Route size={16} /><span>Driven (latest)</span><b>{pts.length > 1 ? <><Count value={driven} digits={1} /> <small>km</small></> : "–"}</b></div>
-            <div><MapPinned size={16} /><span>Left to plant</span><b>{prog ? <><Count value={prog.left} /> <small>km</small></> : "–"}</b></div>
-            <div><Clock size={16} /><span>Arrival estimate</span><b>{eta ? eta.toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "–"}</b></div>
-          </div>
-          <div className="gp-two">
-            <div>
-              <h4><Package size={14} /> {t?.trip ? (t.trip.ended_at ? `Cargo on trip #${t.trip.trip_id} (ended)` : `Cargo on trip #${t.trip.trip_id}`) : "Cargo"}</h4>
-              {!t?.trip ? <div className="gp-empty sm"><span>No trip yet. Start one to let the driver share location.</span></div>
-                : <ul className="gp-tlines">{t.lines.map(l => <li key={`${l.po_id}-${l.po_line}`}><b>{l.po_id}-{l.po_line}</b><span>{l.supplier_name} · {l.material_name}</span><em>{l.plant_id} · due {l.promised_date} · {fmt(l.ordered_qty, 0)} units</em></li>)}</ul>}
-            </div>
-            <div>
-              <h4><Clock size={14} /> Recent updates</h4>
-              {!pts.length ? <div className="gp-empty sm"><span>Waiting for the first position.</span></div>
-                : <ol className="gp-feed">{pts.slice(-6).reverse().map((p, k, arr) => { const nxt = arr[k + 1];
-                  return <li key={p.ts} style={{ "--d": `${k * 60}ms` }}><i className={k === 0 ? "now" : ""} /><b>{since(p.ts)}</b>
-                    <span>{p.speed_kmh == null ? "position received" : `${fmt(p.speed_kmh, 0)} km/h`}{nxt ? ` · ${fmt(km([nxt.lat, nxt.lon], [p.lat, p.lon]), 1)} km since previous` : " · first in view"}</span></li>; })}</ol>}
-            </div>
-          </div>
-        </>}
-      </section>
-    </div>
+      {cur && <div className="gd-detail">
+        <div className="gp-acts">
+          {cur.active && !cur.trip_id && <button className="primary chip-btn" onClick={() => setPicking(p => !p)}><Play size={12} /> Start trip</button>}
+          {cur.trip_id && <button className="ghost chip-btn" onClick={() => run(api.endTrip(cur.vehicle_id), "Trip ended.")}><Square size={12} /> End trip</button>}
+          <button className="ghost chip-btn" title="Issue a new driver link; the old one stops working" onClick={async () => { const r = await run(api.rotateVehicleKey(cur.vehicle_id), "New driver link issued."); if (r) setSecret(r); }}><RotateCw size={12} /> New driver link</button>
+          <span className="muted"><Clock size={12} /> Last position {ago(cur.last_ping)} · {fmt(cur.pings || 0, 0)} positions on this trip</span>
+        </div>
+        {picking && <div className="gp-pick">
+          <div className="gp-pick-h"><b>Which open PO lines is {cur.registration} carrying?</b><span>{pick.length} selected</span></div>
+          <label className="gp-search"><Search size={13} /><input value={lq} onChange={e => setLq(e.target.value)} placeholder="Search PO line, supplier or material" /></label>
+          <div className="gp-lines">{open.loading ? <div className="skeleton" style={{ height: 120 }} /> : lines.map(x => {
+            const on = pick.includes(x.id);
+            return <label key={x.id} className={"gp-line" + (on ? " on" : "")}>
+              <input type="checkbox" checked={on} onChange={() => setPick(p => (on ? p.filter(y => y !== x.id) : [...p, x.id]))} />
+              <b>{x.id}</b><span>{x.supplier_name} · {x.material_name}</span><em>due {x.promised_date}</em></label>; })}
+            {!open.loading && !lines.length && <div className="muted">No open PO lines match.</div>}</div>
+          <div className="gp-acts"><button className="primary chip-btn" disabled={!pick.length} onClick={startTrip}><Play size={12} /> Start trip with {pick.length || "no"} line{pick.length === 1 ? "" : "s"}</button>
+            <button className="ghost chip-btn" onClick={() => setPicking(false)}>Cancel</button></div>
+        </div>}
+        {!picking && <p className="muted" style={{ margin: 0 }}><Package size={12} /> {cur.trip_id ? `On trip #${cur.trip_id}. ` : "No trip running. "}
+          {devRow(cur.vehicle_id) ? "Use View on map to follow it on the Network Tracker." : "It appears on the map once it is on a trip and sharing its position."}</p>}
+      </div>}
+    </section>
   </div>;
 }
