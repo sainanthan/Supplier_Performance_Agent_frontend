@@ -1,10 +1,9 @@
 import { useEffect, useState } from "react";
-import { Activity, AtSign, CheckCircle2, CircleAlert, Cpu, Database, Filter, Plus, Scale, SlidersHorizontal, Timer, ToggleRight, Users, X } from "lucide-react";
+import { Activity, CheckCircle2, CircleAlert, Cpu, Database, Filter, Plus, Scale, SlidersHorizontal, Timer, ToggleRight, X } from "lucide-react";
 import { api } from "../api";
 import { viewFor } from "../roles";
 import { useLoad } from "../util";
 import { PageHead } from "../components/ui";
-import GpsAdmin from "../components/GpsAdmin";
 
 /* Settings as minimal cards. Each role sees only its sections (roles.js `settings`); the backend enforces the same. */
 const KEYS = ["delivery", "quality", "responsiveness", "commercial"];
@@ -33,43 +32,12 @@ const set = (o, path, v) => { const c = structuredClone(o); const ks = path.spli
 const when = t => t?.slice(0, 16).replace("T", " ");
 const human = k => k.replaceAll("_", " ").replace(/^di /, "DI ").replace(/^./, c => c.toUpperCase());
 
-function SCard({ icon: Icon, title, meta, wide, children, action }) {
+function SCard({ icon: Icon, title, meta, wide, children, action, k }) {
   return (
-    <section className={"set-card" + (wide ? " wide" : "")}>
+    <section className={"set-card" + (wide ? " wide" : "") + (k ? ` k-${k}` : "")}>
       <header><span className="set-ico"><Icon size={15} /></span><b>{title}</b>{meta && <span className="set-meta">{meta}</span>}{action}</header>
       <div className="set-body">{children}</div>
     </section>
-  );
-}
-
-/** Where each supplier's quality e-mails go (agent "affected suppliers" e-mails and quality inquiries). */
-function SupplierContacts({ flash }) {
-  const list = useLoad(() => api.contacts(), []);
-  const [edit, setEdit] = useState({}), [q, setQ] = useState("");
-  const rows = (list.data || []).filter(r => !q || `${r.supplier_id} ${r.supplier_name} ${r.email || ""}`.toLowerCase().includes(q.toLowerCase()));
-  const save = async r => {
-    try { await api.contactSave(r.supplier_id, { email: edit[r.supplier_id].trim() }); setEdit(e => { const n = { ...e }; delete n[r.supplier_id]; return n; }); list.reload(); flash(`Saved the quality e-mail for ${r.supplier_name}.`); }
-    catch (e) { flash(e.message); }
-  };
-  const have = (list.data || []).filter(r => r.email).length;
-  return (
-    <SCard icon={AtSign} title="Supplier quality contacts" meta={`${have} of ${(list.data || []).length} have an e-mail`}>
-      <input className="set-search" placeholder="Search supplier" value={q} onChange={e => setQ(e.target.value)} aria-label="Search supplier contacts" />
-      <div className="set-contacts">
-        {rows.map(r => {
-          const v = edit[r.supplier_id], dirty = v !== undefined && v.trim() !== (r.email || "");
-          return (
-            <div key={r.supplier_id} className="set-row">
-              <b className="ellipsis" title={r.supplier_id} style={{ width: 150 }}>{r.supplier_name}</b>
-              <input className="grow" type="email" placeholder="quality@supplier.com" value={v ?? r.email ?? ""} aria-label={`E-mail for ${r.supplier_name}`}
-                onChange={e => setEdit(x => ({ ...x, [r.supplier_id]: e.target.value }))} onKeyDown={e => e.key === "Enter" && dirty && save(r)} />
-              {dirty ? <button className="primary chip-btn" disabled={!v.trim()} onClick={() => save(r)}>Save</button>
-                : r.email ? <CheckCircle2 size={14} className="ok-ic" /> : <CircleAlert size={14} className="warn-ic" />}
-            </div>);
-        })}
-      </div>
-      <div className="set-hint">Used when the agent e-mails affected suppliers about poor-quality or damaged material. Without an address the request still reaches the supplier's portal.</div>
-    </SCard>
   );
 }
 
@@ -88,12 +56,12 @@ export default function Settings({ user, reloadFeatures, features }) {
   const ready = useLoad(() => (can("gov") ? api.dataReadiness().catch(() => null) : Promise.resolve(null)), []);
   const recon = useLoad(() => (can("gov") ? api.recon().catch(() => []) : Promise.resolve([])), []);
   const jobs = useLoad(() => (can("jobs") ? api.jobs().catch(() => null) : Promise.resolve(null)), []);
-  const users = useLoad(() => (admin && can("users") ? api.users() : Promise.resolve([])), [admin]);
   const [draft, setDraft] = useState(null);
   const [note, setNote] = useState("");
   const [msg, setMsg] = useState("");
   const [allRules, setAllRules] = useState(false);
   const [addEx, setAddEx] = useState(false);
+  const [tabSel, setTabSel] = useState(() => { try { return localStorage.getItem("settings.tab") || "kpi"; } catch { return "kpi"; } });
   const [nx, setNx] = useState({ entity_type: "PO_LINE", po_id: "", po_line: 1, entity_id: "", reason: "" });
 
   useEffect(() => { if (cfg.data) setDraft({ ...cfg.data, weights: Object.fromEntries(KEYS.map(k => [k, Math.round(cfg.data.weights[k] * 100)])) }); }, [cfg.data]);
@@ -128,14 +96,20 @@ export default function Settings({ user, reloadFeatures, features }) {
   const lastJobs = Object.values((jobs.data?.runs || []).reduce((m, j) => (m[j.job] ? m : { ...m, [j.job]: j }), {}));
   const h = health.data, u = usage.data?.totals;
   const flagList = flags.data?.detail || [];
+  const TABS = [["kpi", "Scorecard, KPIs & features", can("defs") || can("excl") || can("flags")],
+    ["data", "Data & jobs", can("gov") || can("jobs") || can("sys")]].filter(t => t[2]);
+  const tab = TABS.some(t => t[0] === tabSel) ? tabSel : TABS[0]?.[0];
+  const pickTab = k => { setTabSel(k); try { localStorage.setItem("settings.tab", k); } catch { /* storage unavailable */ } };
 
   return (
     <>
       <PageHead eyebrow={admin ? "Admin" : view.workspace} title="Settings"
         sub={admin ? "KPI definitions, features and system health." : "How KPIs are calculated" + (can("excl") ? ", and the exclusions you can record." : ".")} />
       {msg && <div className="set-flash">{msg}</div>}
-      <div className="set-grid">
-        {can("defs") && draft && <SCard icon={Scale} title="Scorecard weights" meta={v0 ? `v${v0.id} · ${v0.approved_by} · ${v0.created_at?.slice(0, 10)}` : `v${cfg.data?._version}`}>
+      {TABS.length > 1 && <div className="set-tabs" role="tablist" aria-label="Settings sections">
+        {TABS.map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? "on" : ""} onClick={() => pickTab(k)}>{l}</button>)}</div>}
+      <div className={"set-grid t-" + tab}>
+        {tab === "kpi" && can("defs") && draft && <SCard icon={Scale} title="Scorecard weights" k="weights" meta={v0 ? `v${v0.id} · ${v0.approved_by} · ${v0.created_at?.slice(0, 10)}` : `v${cfg.data?._version}`}>
           {KEYS.map(k => (
             <div key={k} className="set-w">
               <span>{k}</span>
@@ -150,7 +124,7 @@ export default function Settings({ user, reloadFeatures, features }) {
           </div>}
         </SCard>}
 
-        {can("defs") && draft && <SCard icon={SlidersHorizontal} title="KPI rules" wide={allRules}
+        {tab === "kpi" && can("defs") && draft && <SCard icon={SlidersHorizontal} title="KPI rules" k="rules" wide={allRules}
           action={<button className="ghost chip-btn" onClick={() => setAllRules(v => !v)}>{allRules ? "Fewer" : admin ? "Edit all" : "Show all"}</button>}>
           <div className={"set-kv" + (allRules ? " many" : "")}>
             {(allRules ? [...KEY_RULES, ...ALL_RULES] : KEY_RULES).map(([path, label]) => (
@@ -161,7 +135,7 @@ export default function Settings({ user, reloadFeatures, features }) {
           {admin && allRules && <div className="set-hint">Changes are saved with the weights (add a change note there).</div>}
         </SCard>}
 
-        {can("excl") && <SCard icon={Filter} title="KPI exclusions" meta={`${activeEx.length} active`}
+        {tab === "kpi" && can("excl") && <SCard icon={Filter} title="KPI exclusions" k="excl" meta={`${activeEx.length} active`}
           action={user?.role !== "VIEWER" && <button className="ghost chip-btn row-flex" onClick={() => setAddEx(v => !v)}>{addEx ? <X size={12} /> : <Plus size={12} />} {addEx ? "Cancel" : "Add"}</button>}>
           {addEx && <div className="set-form">
             <select value={nx.entity_type} onChange={e => setNx({ ...nx, entity_type: e.target.value })} aria-label="Exclusion type">
@@ -181,7 +155,7 @@ export default function Settings({ user, reloadFeatures, features }) {
           {!activeEx.length && !addEx && <div className="set-hint">No exclusions. Every record counts in the KPIs.</div>}
         </SCard>}
 
-        {can("flags") && <SCard icon={ToggleRight} title="Features" meta={`${flagList.filter(f => f.enabled).length} of ${flagList.length} on`}>
+        {tab === "kpi" && can("flags") && <SCard icon={ToggleRight} title="Features" k="flags" meta={`${flagList.filter(f => f.enabled).length} of ${flagList.length} on`}>
           <div className="set-flags">
             {flagList.map(f => (
               <label key={f.key} className="set-flag" title={f.description}>
@@ -191,7 +165,7 @@ export default function Settings({ user, reloadFeatures, features }) {
           </div>
         </SCard>}
 
-        {can("gov") && <SCard icon={Activity} title="Data health" action={admin && <button className="ghost chip-btn" onClick={doRecon}>Reconcile</button>}>
+        {tab === "data" && can("gov") && <SCard icon={Activity} title="Data health" k="health" action={admin && <button className="ghost chip-btn" onClick={doRecon}>Reconcile</button>}>
           <div className="set-stats">
             <div><span>Reconciliation</span><b className={failed ? "bad" : "ok"}>{(recon.data || []).length - failed}/{(recon.data || []).length}</b><em>checks match</em></div>
             <div><span>Data quality</span><b className={dqCount("ERROR") ? "bad" : "ok"}>{dqCount("PASS") + dqCount("OK")}/{dqLatest.length}</b><em>{dqCount("WARN")} warn · {dqCount("ERROR")} error</em></div>
@@ -199,17 +173,20 @@ export default function Settings({ user, reloadFeatures, features }) {
           </div>
         </SCard>}
 
-        {can("gov") && ready.data && <SCard icon={Database} title="Required data" meta={`${ready.data.ready} of ${ready.data.total} sources loaded`}>
+        {tab === "data" && can("gov") && ready.data && <SCard icon={Database} title="Required data" k="req" meta={`${ready.data.ready} of ${ready.data.total} sources loaded`}>
           {ready.data.sources.map(x => (
             <div key={x.table} className="set-row" title={`${x.table} · unlocks: ${x.unlocks}`}>
               {x.ready ? <CheckCircle2 size={14} className="ok-ic" /> : <CircleAlert size={14} className="warn-ic" />}
-              <b className="grow ellipsis">{x.source}</b>
+              <span className="grow set-name"><b className="ellipsis">{x.source}{x.demo && <span className="set-demo">demo</span>}</b>
+                {x.table.startsWith("sp.fact_") && x.ready && <em className="set-loaded" title="When this table was last loaded">{x.last_loaded
+                  ? `Loaded ${new Date(x.last_loaded).toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}`
+                  : "Load date not recorded (reload to stamp it)"}</em>}</span>
               <span className={x.ready ? "muted" : "warn-t"}>{x.rows == null ? "–" : x.ready ? `${Number(x.rows).toLocaleString("en-IN")} rows` : "not loaded"}</span>
             </div>))}
-          <div className="set-hint">Missing extracts: fill the CSV template in <code>data/templates/</code>, save it to <code>data/data/</code>, then run <code>python -m scripts.load_data --only &lt;table&gt;</code>.</div>
+          <div className="set-hint">Missing extracts: fill the CSV template in <code>backend/data/templates/</code>, save it to <code>backend/data/data/</code>, then run <code>python -m scripts.load_data --only &lt;table&gt;</code>. Every load stamps the date shown here.</div>
         </SCard>}
 
-        {can("jobs") && <SCard icon={Timer} title="Scheduled jobs" meta={`every ${jobs.data?.schedule_minutes ?? "–"} min`}>
+        {tab === "data" && can("jobs") && <SCard icon={Timer} title="Scheduled jobs" k="jobs" meta={`every ${jobs.data?.schedule_minutes ?? "–"} min`}>
           {lastJobs.map(j => (
             <div key={j.job} className="set-row">
               <b>{j.job}</b><span className={`pill ${j.status === "OK" ? "sev-LOW" : j.status === "FAILED" ? "sev-HIGH" : "st"}`}>{j.status}</span>
@@ -219,7 +196,7 @@ export default function Settings({ user, reloadFeatures, features }) {
           {!lastJobs.length && <div className="set-hint">No runs yet; the scheduler starts about 90 s after the backend.</div>}
         </SCard>}
 
-        {can("sys") && <SCard icon={Cpu} title="System">
+        {tab === "data" && can("sys") && <SCard icon={Cpu} title="System" k="sys">
           <div className="set-stats">
             <div><span>Database</span><b className={h?.database === "ok" ? "ok" : "bad"}>{h?.database || "–"}</b><em>Neon Postgres</em></div>
             <div><span>Domo AI</span><b className={h?.llm_configured ? "ok" : "bad"}>{h ? (h.llm_configured ? "ready" : "no token") : "–"}</b><em>{u ? `${u.calls} calls · ${u.avg_latency_ms ? (u.avg_latency_ms / 1000).toFixed(1) : "–"} s avg` : "last 30 days"}</em></div>
@@ -227,15 +204,8 @@ export default function Settings({ user, reloadFeatures, features }) {
           </div>
         </SCard>}
 
-        {features?.quality_inquiry && ["ADMIN", "QUALITY", "PROCUREMENT"].includes(user?.role) && <SupplierContacts flash={flash} />}
 
-        {admin && can("users") && <SCard icon={Users} title="Users" meta={`${(users.data || []).length} accounts`}>
-          <div className="set-users">
-            {(users.data || []).map(x => <span key={x.username} title={x.supplier_id ? `Supplier ${x.supplier_id}` : x.username}><b>{x.display_name || x.username}</b><em>{x.role.toLowerCase()}</em></span>)}
-          </div>
-        </SCard>}
 
-        {can("gps") && features?.gps_tracking && ["ADMIN", "PROCUREMENT"].includes(user?.role) && <SCard icon={Database} title="GPS tracking" wide><GpsAdmin canManage /></SCard>}
       </div>
     </>
   );

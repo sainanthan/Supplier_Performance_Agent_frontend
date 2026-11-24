@@ -8,14 +8,14 @@ export const ROLE_VIEWS = {
   ADMIN: {
     label: "Administrator", workspace: "Admin workspace", tone: "admin",
     landing: "home",
-    pages: ["home", "command", "trends", "risk", "tracker", "review", "architecture", "integration"],
-    settings: ["flags", "gps", "defs", "excl", "gov", "jobs", "sys", "users"], settingsLabel: "Settings & governance",
+    pages: ["home", "command", "trends", "risk", "tracker", "gps", "review", "architecture", "integration"],
+    settings: ["flags", "defs", "excl", "gov", "jobs", "sys", "users"], settingsLabel: "Settings & governance",
   },
   PROCUREMENT: {
     label: "Procurement", workspace: "Procurement workspace", tone: "procurement",
     landing: "home",
-    pages: ["home", "command", "trends", "risk", "tracker", "review", "architecture"],
-    settings: ["defs", "excl", "gps"], settingsLabel: "KPI definitions & exclusions",
+    pages: ["home", "command", "trends", "risk", "tracker", "gps", "review", "architecture"],
+    settings: ["defs", "excl"], settingsLabel: "KPI definitions & exclusions",
   },
   QUALITY: {
     label: "Supplier quality", workspace: "Quality workspace", tone: "quality",

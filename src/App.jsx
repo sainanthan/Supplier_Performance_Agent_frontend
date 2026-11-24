@@ -1,6 +1,6 @@
 import { Component, lazy, Suspense, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowLeft, Bell, Bot, Cable, FileText, Gauge, House, LineChart, LogOut, Map as MapIcon, Moon, Network, Radar, RefreshCw, Search, Settings2, Sun, X } from "lucide-react";
+import { ArrowLeft, Bell, Bot, Cable, FileText, Gauge, House, LineChart, LogOut, Map as MapIcon, MapPinned, Moon, Network, Radar, RefreshCw, Search, Settings2, Sun, X } from "lucide-react";
 import "./theme.css";
 import "./app.css";
 import "./story.css";
@@ -22,7 +22,7 @@ const PAGES = {
   home: () => import("./pages/Home"), command: () => import("./pages/CommandCenter"), trends: () => import("./pages/Trends"), risk: () => import("./pages/RiskRadar"),
   twin: () => import("./pages/DigitalTwin"), tracker: () => import("./pages/NetworkTracker"), review: () => import("./pages/ReviewPack"),
   settings: () => import("./pages/Settings"), portal: () => import("./pages/SupplierPortal"), integration: () => import("./pages/DataIntegration"),
-  architecture: () => import("./pages/AgentArchitecture"),
+  architecture: () => import("./pages/AgentArchitecture"), gps: () => import("./pages/GpsTracking"),
 };
 const LAZY = Object.fromEntries(Object.entries(PAGES).map(([k, f]) => [k, lazy(f)]));
 
@@ -34,6 +34,7 @@ const NAV = [
   { id: "trends", label: "OTIF / PPM Trends", icon: LineChart, group: "Main" },
   { id: "risk", label: "Risk Radar", icon: Radar, group: "Main" },
   { id: "tracker", label: "Network Tracker", icon: MapIcon, group: "Main" },
+  { id: "gps", label: "GPS Tracking", icon: MapPinned, group: "Main", flag: "gps_tracking" },
   { id: "review", label: "Review Pack", icon: FileText, group: "Main" },
   { id: "architecture", label: "Agent Architecture", icon: Network, group: "Platform", flag: "agent_architecture" },
   { id: "integration", label: "Data Integration", icon: Cable, group: "Platform", flag: "data_integration" },

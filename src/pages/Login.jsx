@@ -43,16 +43,16 @@ export default function Login({ onLogin }) {
   const remembered = (() => { try { return localStorage.getItem("spa_user") || ""; } catch { return ""; } })();
   const [u, setU] = useState(remembered), [p, setP] = useState("");
   const [show, setShow] = useState(false), [caps, setCaps] = useState(false), [remember, setRemember] = useState(!!remembered);
-  const [err, setErr] = useState(""), [busy, setBusy] = useState(false), [shake, setShake] = useState(0);
-  useEffect(() => { document.title = "Sign in · Supplier Performance Agent"; }, []);
+  const [err, setErr] = useState(""), [busy, setBusy] = useState(false), [shake, setShake] = useState(0), [wake, setWake] = useState(null);
+  useEffect(() => { document.title = "Sign in · Supplier Performance Agent"; fetch("/api/health").catch(() => {}); }, []);   // start waking a sleeping server while the user types
   const submit = async e => {
-    e.preventDefault(); setErr(""); setBusy(true);
+    e.preventDefault(); setErr(""); setBusy(true); setWake(null);
     try {
-      const s = await login(u.trim(), p);
+      const s = await login(u.trim(), p, setWake);
       try { remember ? localStorage.setItem("spa_user", u.trim()) : localStorage.removeItem("spa_user"); } catch { /* storage unavailable */ }
       document.title = "Supplier Performance Agent";
       onLogin(s);
-    } catch (x) { setErr(x.message); setShake(n => n + 1); setBusy(false); }
+    } catch (x) { setErr(x.message); setShake(n => n + 1); setBusy(false); setWake(null); }
   };
   const capsCheck = e => setCaps(!!e.getModifierState?.("CapsLock"));
 
@@ -103,6 +103,7 @@ export default function Login({ onLogin }) {
             {caps && <span className="lg-caps">Caps Lock is on</span>}
           </div>
 
+          {busy && wake != null && <div className="lg-wake" role="status"><Loader2 size={14} className="spin" /> The server is waking up after being idle ({wake}s). This can take up to a minute; you will be signed in automatically.</div>}
           <AnimatePresence>{err && <motion.div className="lg-err" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}>{err}</motion.div>}</AnimatePresence>
 
           <button className="lg-btn" disabled={busy || !u.trim() || !p}>

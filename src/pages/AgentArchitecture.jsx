@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowDown, Bot, Brain, RefreshCcw, Database, Inbox, LayoutGrid, Mail, MailCheck, Play, RotateCcw, Send, ShieldCheck, Square, Terminal, Workflow, Wrench, Zap } from "lucide-react";
-import WorkflowCanvas from "../components/WorkflowCanvas";
-import AutoLoopCanvas from "../components/AutoLoopCanvas";
+import { ArrowDown, Bot, Brain, Database, Inbox, Mail, MailCheck, Play, RotateCcw, Send, ShieldCheck, Square, Terminal, Workflow, Wrench, Zap } from "lucide-react";
+import AgentFlowBoard, { FLOW_PARTS } from "../components/AgentFlowBoard";
+import { useAgentParts } from "../components/agentParts";
 import AnswerView from "../components/AnswerView";
 import { api, streamChat } from "../api";
 import { drillAnchor, DrillBar, linkify } from "../components/drill";
@@ -38,6 +38,7 @@ function derive(events, cat, role) {
   let llm = 0, llmMs = 0, tools = [], ds = new Set(), final = null, err = null, retry = null;
   for (const ev of events) {
     const t = ev._t || "";
+    if (ev.type === "stage") { log.push([t, ev.k || "ok", ev.text]); continue; }
     if (ev.type === "start") { st.input = { status: "run", tel: `Question received · ${ev.q.length} characters` }; log.push([t, "info", `Question received: "${ev.q}"`]); }
     else if (ev.type === "meta") {
       st.input = { status: "done", tel: `Role ${role} · policy passed · rate limit OK · conversation ${String(ev.conversation_id || "").slice(0, 8)}` };
@@ -126,8 +127,15 @@ export default function AgentArchitecture({ user, nav, openSupplier, allowed = [
   const [autoMail, setAutoMail] = useState(true), [mailTo, setMailTo] = useState(user?.role === "QUALITY" ? "QUALITY_SUP" : "BOTH_SUP");
   const toSup = mailTo.endsWith("SUP") || mailTo === "SUPPLIERS", toRole = mailTo.replace("_SUP", "");
   const mailRef = useRef();
-  const [view, setView] = useState(() => { try { return localStorage.getItem("ax-view") || "flow"; } catch { return "flow"; } });
-  const pickView = x => { setView(x); try { localStorage.setItem("ax-view", x); } catch { /* private mode */ } };
+  const parts = useAgentParts(c, user?.role);
+  const [runKey, setRunKey] = useState(0);
+  const [prog, setProg] = useState({ pct: 0, step: 0, total: 0, label: null });
+  const openPage = g => {
+    if (!g) return;
+    if (g[0] === "__ask") { window.scrollTo({ top: 0, behavior: "smooth" }); return; }
+    try { if (g[0] === "risk" && g[1]) sessionStorage.setItem("rr.tab", g[1]); if (g[0] === "settings" && g[1]) localStorage.setItem("settings.tab", g[1]); } catch { /* storage unavailable */ }
+    nav?.(g[0]);
+  };
   const [t0, setT0] = useState(null), [t1, setT1] = useState(null), [, tick] = useState(0);
   useEffect(() => { if (!running) return; const h = setInterval(() => tick(x => x + 1), 100); return () => clearInterval(h); }, [running]);
   const push = ev => setEvents(e => [...e, { ...ev, _t: ts() }]);
@@ -151,14 +159,14 @@ export default function AgentArchitecture({ user, nav, openSupplier, allowed = [
 
   useEffect(() => { logRef.current && (logRef.current.scrollTop = logRef.current.scrollHeight); }, [v.log.length]);
   useEffect(() => {                                   // "How this answer was built" from the chat
-    if (trace && c) { setReplay(true); setQ(trace.question || q); setEvents(replayEvents(trace)); setTrace?.(null); }
+    if (trace && c) { setReplay(true); setQ(trace.question || q); setEvents(replayEvents(trace)); setRunKey(k => k + 1); setTrace?.(null); }
   }, [trace, c]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function run() {
     const text = q.trim();
     if (!text || running) return;
     const ctrl = new AbortController(); abort.current = ctrl;
-    setReplay(false); setRunning(true); setEvents([{ type: "start", q: text, _t: ts() }]); setT0(Date.now()); setT1(null);
+    setReplay(false); setRunning(true); setEvents([{ type: "start", q: text, _t: ts() }]); setRunKey(k => k + 1); setT0(Date.now()); setT1(null);
     let fin = null;
     try { await streamChat(null, text, ev => { if (ev.type === "final") fin = ev; if (ev.type !== "thinking") push(ev); }, ctrl.signal); }
     catch (e) { push({ type: "error", message: e.name === "AbortError" ? "stopped by you" : e.message }); }
@@ -175,11 +183,13 @@ export default function AgentArchitecture({ user, nav, openSupplier, allowed = [
     <div className="ax">
       <section className="ax-hero">
         <div className="ax-head">
-          <span className="ax-badge-ic"><Zap size={22} /></span>
+          <span className="ax-badge-ic"><Workflow size={22} /></span>
           <div className="ax-title">
-            <div className="ax-h1">Agent Architecture & Live Run Pipeline
-              <span className="ax-chip green">● 2 flows</span><span className="ax-chip blue">Neon PostgreSQL</span><span className="ax-chip orange">Domo AI · LangChain</span></div>
-            <p><b>Ask flow</b>: a question runs Intake → Orchestrator → Specialists on Neon → Validator → Answer → Alert. <b>Autonomous loop</b>: on a schedule the agent watches, follows up, escalates, drafts corrective actions and sourcing reviews, and a person approves.</p>
+            <div className="ax-h1">Agent Flow: how the agents work, step by step
+              <span className="ax-chip green">● {FLOW_PARTS} agents & models · {Object.keys(c?.tools || {}).length || 28} tools</span><span className="ax-chip blue">Neon PostgreSQL</span><span className="ax-chip orange">Domo AI · LangChain</span></div>
+            <p>Ask a question and press <b>Run agent pipeline</b>. The agents work one at a time: the <b>watcher agents and models</b> look for risk and late deliveries,
+              the <b>AI agent</b> plans with the Domo LLM and calls its specialist analysts on Neon, the <b>validator</b> checks every figure, the <b>output agents</b> answer,
+              alert owners and draft supplier requests, and a <b>person approves</b> before anything reaches a supplier. Click any node to see its details.</p>
           </div>
         </div>
         <div className="ax-run">
@@ -196,31 +206,18 @@ export default function AgentArchitecture({ user, nav, openSupplier, allowed = [
               <option value="BOTH">Procurement + Quality</option><option value="PROCUREMENT">Procurement</option><option value="QUALITY">Quality</option><option value="QUALITY_SUP">Quality + affected suppliers</option></select></label>
           <button className="ax-ghost" disabled={!v.final} onClick={() => outRef.current?.scrollIntoView({ behavior: "smooth" })}><ArrowDown size={14} /> Answer</button>
           <button className="ax-ghost" disabled={!v.mail && !v.supMail} onClick={() => mailRef.current?.scrollIntoView({ behavior: "smooth" })}><MailCheck size={14} /> Email</button>
-          {started && !running && <button className="ax-ghost" title="Reset" aria-label="Reset" onClick={() => { setEvents([]); setReplay(false); setT0(null); }}><RotateCcw size={14} /></button>}
+          {started && !running && <button className="ax-ghost" title="Reset" aria-label="Reset" onClick={() => { setEvents([]); setReplay(false); setT0(null); setRunKey(0); setProg({ pct: 0, step: 0, total: 0, label: null }); }}><RotateCcw size={14} /></button>}
         </div>
         <div className="ax-prog">
-          <span>Execution status: <b>{!started ? "All 6 layers ready" : running ? "Running" : v.err ? "Stopped" : replay ? "Replay of a stored answer" : "Completed"}</b>
+          <span>Execution status: <b>{!started ? `Ready · ${FLOW_PARTS} agents & models` : running && !prog.label ? "Starting" : v.err ? "Stopped" : prog.label && prog.label !== "Complete" ? `Step ${prog.step} of ${prog.total} · ${prog.label}` : replay ? "Replay of a stored answer" : "Completed"}</b>
             {v.datasets.length > 0 && <> · {v.datasets.length} dataset(s) read</>}</span>
-          <span className="ax-view" role="tablist" aria-label="Pipeline view">
-            <button className={view === "flow" ? "on" : ""} onClick={() => pickView("flow")}><Workflow size={13} /> Ask flow</button>
-            <button className={view === "loop" ? "on" : ""} onClick={() => pickView("loop")}><RefreshCcw size={13} /> Autonomous loop</button>
-            <button className={view === "layers" ? "on" : ""} onClick={() => pickView("layers")}><LayoutGrid size={13} /> Layers</button></span>
-          <b className="ax-pct">{v.pct}% completed</b>
-          <div className="ax-bar"><i style={{ width: `${v.pct}%` }} /></div>
+          <span className="ax-view" role="tablist" aria-label="View"><button className="on" role="tab" aria-selected="true"><Workflow size={13} /> Agent Flow</button></span>
+          <b className="ax-pct">{prog.pct}% completed</b>
+          <div className="ax-bar"><i style={{ width: `${prog.pct}%` }} /></div>
         </div>
 
-        {view === "loop" ? <AutoLoopCanvas role={user?.role} nav={nav} /> : view === "flow" ? <WorkflowCanvas v={v} q={q} started={started} running={running} elapsed={elapsed} mailCfg={mailCfg} layers={LAYERS} /> : <div className="ax-layers">
-          {LAYERS.map(l => {
-            const s = v.st[l.id];
-            return (
-              <article key={l.id} className={`ax-card t-${l.tone} s-${s.status}`}>
-                <div className="ax-card-top"><span className={`ax-tag t-${l.tone}`}>{l.tag}</span><span className={`ax-st s-${s.status}`}>{STATUS[s.status]}</span></div>
-                <h3><l.icon size={17} /> Layer {l.n} · {l.title}</h3>
-                <p>{l.desc}</p>
-                <div className="ax-tel"><b>Telemetry:</b> {s.tel || (l.id === "tools" && c ? `${Object.keys(c.tools).length} governed tools · ${Object.keys(c.agents).length - 2} specialists ready` : "Waiting for a run")}</div>
-              </article>);
-          })}
-        </div>}
+        <AgentFlowBoard parts={parts} v={v} running={running} runKey={runKey} mailCfg={mailCfg} catalog={c} onOpen={openPage}
+          onLog={(k, text) => push({ type: "stage", k, text })} onProgress={setProg} />
 
         <div className="ax-console" ref={logRef} aria-live="polite">
           <div className="ax-console-h"><Terminal size={13} /> Agent execution stream (stdout / telemetry)</div>

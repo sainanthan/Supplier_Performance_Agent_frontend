@@ -15,12 +15,25 @@ export function getSession() { try { return JSON.parse(sessionStorage.getItem(TO
 export function setSession(s) { try { s ? sessionStorage.setItem(TOKEN_KEY, JSON.stringify(s)) : sessionStorage.removeItem(TOKEN_KEY); } catch { /* storage unavailable */ } _cache.clear(); }
 function authHeaders() { const s = getSession(); return s?.token ? { Authorization: `Bearer ${s.token}` } : {}; }
 function onUnauthorized() { setSession(null); window.dispatchEvent(new Event("auth:logout")); }
-export async function login(username, password) {
-  const r = await fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password }) });
-  const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(d.detail || `Sign-in failed (${r.status})`);
-  setSession(d);
-  return d;
+// A hosted backend on a free plan sleeps when idle and takes up to about a minute to wake; the proxy in front of it answers
+// 502/503/504 meanwhile. Sign-in keeps retrying for up to 2 minutes and reports progress through onWait(seconds).
+export async function login(username, password, onWait) {
+  const t0 = Date.now(), WAKE = [502, 503, 504];
+  for (;;) {
+    let r = null;
+    try { r = await fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password }) }); }
+    catch { r = null; }                                                      // network error while the server starts
+    if (r && !WAKE.includes(r.status)) {
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.detail || `Sign-in failed (${r.status})`);
+      setSession(d);
+      return d;
+    }
+    const waited = Math.round((Date.now() - t0) / 1000);
+    if (waited > 120) throw new Error("The server did not wake up in time. Please try again in a minute.");
+    onWait?.(waited);
+    await new Promise(res => setTimeout(res, 4000));
+  }
 }
 
 async function req(path, opts = {}) {
@@ -65,6 +78,7 @@ export const api = {
   materials: () => req("/api/materials"),
   sourcing: id => req(`/api/materials/${id}/sourcing`),
   concentration: () => req("/api/concentration"),
+  materialSpendTrends: f => req("/api/concentration/trends" + qs(f)),
   supplier: (id, f) => req(`/api/suppliers/${id}` + qs(f)),
   reviewPack: (id, f) => req(`/api/suppliers/${id}/review-pack` + qs(f)),
   narrative: id => req(`/api/suppliers/${id}/review-pack/narrative`, { method: "POST" }),
@@ -156,6 +170,8 @@ export const api = {
   startTrip: (id, shipment_ids) => req(`/api/vehicles/${id}/trip`, body("POST", { shipment_ids })),
   endTrip: id => req(`/api/vehicles/${id}/end-trip`, { method: "POST" }),
   rotateVehicleKey: id => req(`/api/vehicles/${id}/rotate-key`, { method: "POST" }),
+  vehicleTrack: id => req(`/api/vehicles/${id}/track`),
+  vehiclesSetup: () => req("/api/vehicles/setup"),
   trackerFresh: f => rawReq("/api/tracker" + qs(f)),
   // ---- data integration (flag data_integration)
   diSummary: () => req("/api/integration/summary"),

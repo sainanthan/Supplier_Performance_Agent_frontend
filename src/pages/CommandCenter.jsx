@@ -91,7 +91,7 @@ export default function CommandCenter({ plant, theme, openSupplier, ask, nav, us
         </Card>
       </div>
 
-      {["ADMIN", "PROCUREMENT", "QUALITY"].includes(user?.role) && <ConcentrationHeatmap scope={nF ? ids : null} sups={allCards} alerts={al.data} openSupplier={openSupplier} ask={ask} nav={nav} user={user} />}
+      {["ADMIN", "PROCUREMENT", "QUALITY"].includes(user?.role) && <ConcentrationHeatmap scope={nF ? ids : null} plant={plant} sups={allCards} alerts={al.data} openSupplier={openSupplier} ask={ask} nav={nav} user={user} />}
 
       <ScorecardTable plant={plant} openSupplier={openSupplier} f={f} />
 
